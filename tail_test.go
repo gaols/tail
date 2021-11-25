@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/exec"
 	"testing"
-	"time"
 )
 
 func TestTailF(t *testing.T) {
@@ -67,7 +66,6 @@ func TestTailF_Remove(t *testing.T) {
 		}
 		filePath := file.Name()
 		_ = os.Remove(filePath)
-		time.Sleep(1*time.Millisecond)
 
 		file, err := os.Create(filePath)
 		if err != nil {

@@ -84,7 +84,6 @@ func tail(filePath string, waitFileExist bool, lineCh chan string, closeCh chan 
 	}
 	size := stat.Size()
 	stat2 := stat.Sys().(*syscall.Stat_t)
-	cTime := stat2.Ctim
 
 	start := size
 	if size >= 1000 {
@@ -96,7 +95,7 @@ func tail(filePath string, waitFileExist bool, lineCh chan string, closeCh chan 
 	}
 
 	done := make(chan struct{}, 1)
-	watcher, removeCh, writeCh, errorCh, regWatchErr := watchFile(filePath, cTime, done)
+	watcher, removeCh, writeCh, errorCh, regWatchErr := watchFile(filePath, stat2, done)
 	if regWatchErr != nil {
 		return regWatchErr
 	}
@@ -220,7 +219,7 @@ func ensureOpenFile(filePath string) (*os.File, error) {
 	}
 }
 
-func watchFile(filePath string, timespec syscall.Timespec, done chan struct{}) (*fsnotify.Watcher, chan struct{}, chan struct{}, chan error, error) {
+func watchFile(filePath string, prevStat *syscall.Stat_t, done chan struct{}) (*fsnotify.Watcher, chan struct{}, chan struct{}, chan error, error) {
 	removeCh := make(chan struct{})
 	writeCh := make(chan struct{})
 	errorCh := make(chan error)
@@ -244,8 +243,8 @@ func watchFile(filePath string, timespec syscall.Timespec, done chan struct{}) (
 					return
 				}
 				stat2 := stat.Sys().(*syscall.Stat_t)
-				cTime := stat2.Ctim
-				if cTime != timespec {
+				aTime := stat2.Atim
+				if aTime != prevStat.Atim || stat2.Ino != prevStat.Ino {
 					log.Println("poll: file remove detected")
 					removeCh <- struct{}{}
 					return

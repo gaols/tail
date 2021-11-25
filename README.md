@@ -1,6 +1,6 @@
 # tail
 
-Tail a file pragmatically just like you run shell command `tail -f /somefile`.
+Tail a file programmatically just like you run shell command `tail -f /somefile`.
 
 
 ```
