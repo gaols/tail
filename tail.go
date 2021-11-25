@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/fsnotify/fsnotify"
 	"io"
+	"log"
 	"os"
 	"strings"
 	"syscall"
@@ -15,11 +16,27 @@ import (
 var openFileError = errors.New("open file error")
 var closeError = errors.New("close")
 
-func TailF(filePath string, waitFileExist bool) (chan string, chan int, chan error) {
+const (
+	// file is eof, eof might triggered multiple times.
+	EventEof = "eof"
+	// if the tailing file get truncated or deleted, tail will restart
+	EventTailRestart = "rs"
+)
+
+func TailF(filePath string, waitFileExist bool) (chan string, func(), chan error) {
+	return tailF(filePath, waitFileExist, nil)
+}
+
+func tailF(filePath string, waitFileExist bool, inspectCh chan string) (chan string, func(), chan error) {
 	lineCh := make(chan string)
 	closeCh := make(chan int, 1)
 	errorCh := make(chan error, 1)
+	// used as a rate limit to prevent tail restart too frequently
 	tk := time.NewTicker(10 * time.Second)
+
+	closeFunc := func() {
+		close(closeCh)
+	}
 
 	go func() {
 		defer tk.Stop()
@@ -28,13 +45,19 @@ func TailF(filePath string, waitFileExist bool) (chan string, chan int, chan err
 			case <-closeCh:
 				return
 			default:
-				err := tail(filePath, waitFileExist, lineCh, closeCh)
+				log.Println("a brand new tail start")
+				err := tail(filePath, waitFileExist, lineCh, closeCh, inspectCh)
 				if err != nil {
 					if err == openFileError {
 						errorCh <- err
 						return
 					} else if err == closeError {
 						return
+					} else {
+						log.Printf("tail error: %s\n", err.Error())
+						if inspectCh != nil {
+							inspectCh <- EventTailRestart
+						}
 					}
 				}
 			}
@@ -42,10 +65,10 @@ func TailF(filePath string, waitFileExist bool) (chan string, chan int, chan err
 		}
 	}()
 
-	return lineCh, closeCh, errorCh
+	return lineCh, closeFunc, errorCh
 }
 
-func tail(filePath string, waitFileExist bool, lineCh chan string, closeCh chan int) error {
+func tail(filePath string, waitFileExist bool, lineCh chan string, closeCh chan int, ch chan string) error {
 	file, err := os.Open(filePath)
 	if os.IsNotExist(err) && waitFileExist {
 		file, err = ensureOpenFile(filePath)
@@ -81,7 +104,7 @@ func tail(filePath string, waitFileExist bool, lineCh chan string, closeCh chan 
 
 	reader := bufio.NewReader(file)
 	var drainErr error
-	halfLine, err := drainFile(reader, lineCh, "")
+	halfLine, err := drainFile(reader, lineCh, "", ch)
 	if err != nil {
 		return fmt.Errorf("drain file error: %s", err.Error())
 	}
@@ -103,7 +126,7 @@ func tail(filePath string, waitFileExist bool, lineCh chan string, closeCh chan 
 		case <-removeCh:
 			return errors.New("file removed")
 		case <-oneMoreTry:
-			halfLine, drainErr = drainFile(reader, lineCh, halfLine)
+			halfLine, drainErr = drainFile(reader, lineCh, halfLine, ch)
 			if drainErr != nil {
 				return drainErr
 			}
@@ -118,16 +141,17 @@ func tail(filePath string, waitFileExist bool, lineCh chan string, closeCh chan 
 			}
 			if stat.Size() < size {
 				// file may be truncated
+				log.Println("poll: file may be truncated")
 				return errors.New("file shrink error")
 			}
 			size = stat.Size()
 
-			halfLine, drainErr = drainFile(reader, lineCh, halfLine)
+			halfLine, drainErr = drainFile(reader, lineCh, halfLine, ch)
 			if drainErr != nil {
 				return drainErr
 			}
 		case <-pollTicker.C:
-			halfLine, drainErr = drainFile(reader, lineCh, halfLine)
+			halfLine, drainErr = drainFile(reader, lineCh, halfLine, ch)
 			if drainErr != nil {
 				return drainErr
 			}
@@ -153,7 +177,7 @@ func drainWriteCh(ch chan struct{}) bool {
 	}
 }
 
-func drainFile(reader *bufio.Reader, lineCh chan string, halfLine string) (string, error) {
+func drainFile(reader *bufio.Reader, lineCh chan string, halfLine string, inspectCh chan string) (string, error) {
 	halfLineUsed := false
 	if halfLine == "" {
 		halfLineUsed = true
@@ -161,6 +185,10 @@ func drainFile(reader *bufio.Reader, lineCh chan string, halfLine string) (strin
 	for {
 		line, err := reader.ReadString('\n')
 		if err == io.EOF {
+			if inspectCh != nil {
+				//eofCh is used as testing purpose
+				inspectCh <- EventEof
+			}
 			return line, nil
 		}
 		if err == nil {
@@ -218,6 +246,7 @@ func watchFile(filePath string, timespec syscall.Timespec, done chan struct{}) (
 				stat2 := stat.Sys().(*syscall.Stat_t)
 				cTime := stat2.Ctim
 				if cTime != timespec {
+					log.Println("poll: file remove detected")
 					removeCh <- struct{}{}
 					return
 				}
@@ -236,6 +265,9 @@ func watchFile(filePath string, timespec syscall.Timespec, done chan struct{}) (
 				}
 				if event.Op&fsnotify.Write == fsnotify.Write {
 					writeCh <- struct{}{}
+				}
+				if event.Op&fsnotify.Remove == fsnotify.Remove {
+					log.Println("fsnotify: file remove detected")
 				}
 			case err, ok := <-watcher.Errors:
 				if !ok {
