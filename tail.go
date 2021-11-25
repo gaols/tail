@@ -25,12 +25,41 @@ const (
 	EventTailRestart = "rs"
 )
 
+type SeekOffset struct {
+	Offset int64
+	Whence int // io.Seek*
+}
+
+var (
+	//SeekFromEnd tail file from end
+	SeekFromEnd = &SeekOffset{
+		Offset: 0,
+		Whence: io.SeekEnd,
+	}
+
+	// SeekOffsetAuto tail file from offset (end - 1000) if file size is gt than 1000, else tail from start
+	SeekOffsetAuto = &SeekOffset{
+		Offset: 0,
+		Whence: -1,
+	}
+
+	// SeekFromStart tail file from offset 0
+	SeekFromStart = &SeekOffset{
+		Offset: 0,
+		Whence: io.SeekStart,
+	}
+)
+
 type Config struct {
 	PollInterval time.Duration
+	Offset       *SeekOffset
 }
 
 func NewDefaultConfig() *Config {
-	return &Config{PollInterval: 10 * time.Second}
+	return &Config{
+		PollInterval: 10 * time.Second,
+		Offset:       SeekOffsetAuto,
+	}
 }
 
 func TailF(filePath string, waitFileExist bool) (chan string, func(), chan error) {
@@ -81,6 +110,8 @@ func tailF(filePath string, waitFileExist bool, inspectCh chan string, config *C
 			}
 			if !reTailImm {
 				<-tk.C
+			} else {
+				reTailImm = !reTailImm
 			}
 		}
 	}()
@@ -105,11 +136,8 @@ func tail(filePath string, waitFileExist bool, lineCh chan string, closeCh chan 
 	size := stat.Size()
 	stat2 := stat.Sys().(*syscall.Stat_t)
 
-	start := 0
-	if size >= 1000 {
-		start = -1000
-	}
-	_, err = file.Seek(int64(start), io.SeekEnd)
+	offset := initSeekOffset(config, size)
+	_, err = file.Seek(offset.Offset, offset.Whence)
 	if err != nil {
 		return fmt.Errorf("seek file error: %s", err.Error())
 	}
@@ -176,6 +204,22 @@ func tail(filePath string, waitFileExist bool, lineCh chan string, closeCh chan 
 			}
 		}
 	}
+}
+
+func initSeekOffset(config *Config, size int64) *SeekOffset {
+	offset := config.Offset
+	if offset == nil {
+		offset = SeekOffsetAuto
+	}
+	if *offset == *SeekOffsetAuto {
+		var start int64
+		if size >= 1000 {
+			start = -1000
+		}
+		offset.Offset = start
+		offset.Whence = io.SeekEnd
+	}
+	return offset
 }
 
 func emitLastHalfLine(halfLine string, lineCh chan string) {
