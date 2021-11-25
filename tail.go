@@ -105,11 +105,11 @@ func tail(filePath string, waitFileExist bool, lineCh chan string, closeCh chan 
 	size := stat.Size()
 	stat2 := stat.Sys().(*syscall.Stat_t)
 
-	start := size
+	start := 0
 	if size >= 1000 {
-		start = size - 1000
+		start = -1000
 	}
-	_, err = file.Seek(-start, io.SeekEnd)
+	_, err = file.Seek(int64(start), io.SeekEnd)
 	if err != nil {
 		return fmt.Errorf("seek file error: %s", err.Error())
 	}
