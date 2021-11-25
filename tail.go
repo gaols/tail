@@ -94,7 +94,7 @@ func tail(filePath string, waitFileExist bool, lineCh chan string, closeCh chan 
 		return fmt.Errorf("seek file error: %s", err.Error())
 	}
 
-	done := make(chan struct{}, 1)
+	done := make(chan struct{})
 	watcher, removeCh, writeCh, errorCh, regWatchErr := watchFile(filePath, stat2, done)
 	if regWatchErr != nil {
 		return regWatchErr
@@ -113,7 +113,7 @@ func tail(filePath string, waitFileExist bool, lineCh chan string, closeCh chan 
 	oneMoreTry := make(chan struct{}, 1)
 	defer func() {
 		emitLastHalfLine(halfLine, lineCh)
-		done <- struct{}{}
+		close(done)
 	}()
 
 	for {
