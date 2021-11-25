@@ -15,6 +15,8 @@ import (
 
 var openFileError = errors.New("open file error")
 var closeError = errors.New("close")
+var removeError = errors.New("file removed")
+var shrinkError = errors.New("file shrink")
 
 const (
 	// file is eof, eof might triggered multiple times.
@@ -23,11 +25,23 @@ const (
 	EventTailRestart = "rs"
 )
 
-func TailF(filePath string, waitFileExist bool) (chan string, func(), chan error) {
-	return tailF(filePath, waitFileExist, nil)
+type Config struct {
+	PollInterval time.Duration
 }
 
-func tailF(filePath string, waitFileExist bool, inspectCh chan string) (chan string, func(), chan error) {
+func NewDefaultConfig() *Config {
+	return &Config{PollInterval: 10 * time.Second}
+}
+
+func TailF(filePath string, waitFileExist bool) (chan string, func(), chan error) {
+	return tailF(filePath, waitFileExist, nil, NewDefaultConfig())
+}
+
+func TailWithConfig(filePath string, waitFileExist bool, conf *Config) (chan string, func(), chan error) {
+	return tailF(filePath, waitFileExist, nil, conf)
+}
+
+func tailF(filePath string, waitFileExist bool, inspectCh chan string, config *Config) (chan string, func(), chan error) {
 	lineCh := make(chan string)
 	closeCh := make(chan int, 1)
 	errorCh := make(chan error, 1)
@@ -40,13 +54,14 @@ func tailF(filePath string, waitFileExist bool, inspectCh chan string) (chan str
 
 	go func() {
 		defer tk.Stop()
+		reTailImm := false
 		for {
 			select {
 			case <-closeCh:
 				return
 			default:
 				log.Println("a brand new tail start")
-				err := tail(filePath, waitFileExist, lineCh, closeCh, inspectCh)
+				err := tail(filePath, waitFileExist, lineCh, closeCh, inspectCh, config)
 				if err != nil {
 					if err == openFileError {
 						errorCh <- err
@@ -58,17 +73,22 @@ func tailF(filePath string, waitFileExist bool, inspectCh chan string) (chan str
 						if inspectCh != nil {
 							inspectCh <- EventTailRestart
 						}
+						if err == removeError || err == shrinkError {
+							reTailImm = true
+						}
 					}
 				}
 			}
-			<-tk.C
+			if !reTailImm {
+				<-tk.C
+			}
 		}
 	}()
 
 	return lineCh, closeFunc, errorCh
 }
 
-func tail(filePath string, waitFileExist bool, lineCh chan string, closeCh chan int, ch chan string) error {
+func tail(filePath string, waitFileExist bool, lineCh chan string, closeCh chan int, ch chan string, config *Config) error {
 	file, err := os.Open(filePath)
 	if os.IsNotExist(err) && waitFileExist {
 		file, err = ensureOpenFile(filePath)
@@ -95,7 +115,7 @@ func tail(filePath string, waitFileExist bool, lineCh chan string, closeCh chan 
 	}
 
 	done := make(chan struct{})
-	watcher, removeCh, writeCh, errorCh, regWatchErr := watchFile(filePath, stat2, done)
+	watcher, removeCh, writeCh, errorCh, regWatchErr := watchFile(filePath, stat2, config, done)
 	if regWatchErr != nil {
 		return regWatchErr
 	}
@@ -123,7 +143,7 @@ func tail(filePath string, waitFileExist bool, lineCh chan string, closeCh chan 
 		case watchErr := <-errorCh:
 			return watchErr
 		case <-removeCh:
-			return errors.New("file removed")
+			return removeError
 		case <-oneMoreTry:
 			halfLine, drainErr = drainFile(reader, lineCh, halfLine, ch)
 			if drainErr != nil {
@@ -141,7 +161,7 @@ func tail(filePath string, waitFileExist bool, lineCh chan string, closeCh chan 
 			if stat.Size() < size {
 				// file may be truncated
 				log.Println("poll: file may be truncated")
-				return errors.New("file shrink error")
+				return shrinkError
 			}
 			size = stat.Size()
 
@@ -219,7 +239,7 @@ func ensureOpenFile(filePath string) (*os.File, error) {
 	}
 }
 
-func watchFile(filePath string, prevStat *syscall.Stat_t, done chan struct{}) (*fsnotify.Watcher, chan struct{}, chan struct{}, chan error, error) {
+func watchFile(filePath string, prevStat *syscall.Stat_t, config *Config, done chan struct{}) (*fsnotify.Watcher, chan struct{}, chan struct{}, chan error, error) {
 	removeCh := make(chan struct{})
 	writeCh := make(chan struct{})
 	errorCh := make(chan error)
@@ -229,7 +249,7 @@ func watchFile(filePath string, prevStat *syscall.Stat_t, done chan struct{}) (*
 	}
 
 	go func() {
-		tk := time.NewTicker(10 * time.Second)
+		tk := time.NewTicker(config.PollInterval)
 		defer tk.Stop()
 		for {
 			select {

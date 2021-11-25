@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"testing"
+	"time"
 )
 
 func TestTailF(t *testing.T) {
@@ -17,7 +18,7 @@ func TestTailF(t *testing.T) {
 	}
 	file.Close()
 	eofCh := make(chan string)
-	lineCh, closeFunc, errCh := tailF(file.Name(), true, eofCh)
+	lineCh, closeFunc, errCh := tailF(file.Name(), true, eofCh, NewDefaultConfig())
 	buf := bytes.Buffer{}
 	done := make(chan int)
 	go func() {
@@ -47,7 +48,7 @@ func TestTailF_Remove(t *testing.T) {
 	}
 	_ = file.Close()
 	inspectCh := make(chan string)
-	lineCh, closeFunc, errCh := tailF(file.Name(), true, inspectCh)
+	lineCh, closeFunc, errCh := tailF(file.Name(), true, inspectCh, &Config{PollInterval: 500*time.Millisecond})
 	buf := bytes.Buffer{}
 	done := make(chan int)
 
@@ -126,7 +127,7 @@ func TestTailF_Truncate(t *testing.T) {
 	}
 	_ = file.Close()
 	inspectCh := make(chan string)
-	lineCh, closeFunc, errCh := tailF(file.Name(), true, inspectCh)
+	lineCh, closeFunc, errCh := tailF(file.Name(), true, inspectCh, &Config{PollInterval: 500*time.Millisecond})
 	done := make(chan int)
 
 	go func() {
