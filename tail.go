@@ -156,9 +156,6 @@ func tail(filePath string, waitFileExist bool, lineCh chan string, closeCh chan 
 		return fmt.Errorf("drain file error: %s", err.Error())
 	}
 
-	pollTicker := time.NewTicker(10 * time.Second)
-	defer pollTicker.Stop()
-	oneMoreTry := make(chan struct{}, 1)
 	defer func() {
 		emitLastHalfLine(halfLine, lineCh)
 		close(done)
@@ -172,15 +169,7 @@ func tail(filePath string, waitFileExist bool, lineCh chan string, closeCh chan 
 			return watchErr
 		case <-removeCh:
 			return removeError
-		case <-oneMoreTry:
-			halfLine, drainErr = drainFile(reader, lineCh, halfLine, ch)
-			if drainErr != nil {
-				return drainErr
-			}
 		case <-writeCh:
-			if drainWriteCh(writeCh) {
-				oneMoreTry <- struct{}{}
-			}
 			// check whether file is truncated or size shrink
 			stat, err := os.Stat(filePath)
 			if err != nil {
@@ -193,11 +182,6 @@ func tail(filePath string, waitFileExist bool, lineCh chan string, closeCh chan 
 			}
 			size = stat.Size()
 
-			halfLine, drainErr = drainFile(reader, lineCh, halfLine, ch)
-			if drainErr != nil {
-				return drainErr
-			}
-		case <-pollTicker.C:
 			halfLine, drainErr = drainFile(reader, lineCh, halfLine, ch)
 			if drainErr != nil {
 				return drainErr
@@ -225,18 +209,6 @@ func initSeekOffset(config *Config, size int64) *SeekOffset {
 func emitLastHalfLine(halfLine string, lineCh chan string) {
 	if halfLine != "" {
 		lineCh <- halfLine
-	}
-}
-
-func drainWriteCh(ch chan struct{}) bool {
-	ret := false
-	for {
-		select {
-		case <-ch:
-			ret = true
-		default:
-			return ret
-		}
 	}
 }
 
@@ -285,7 +257,7 @@ func ensureOpenFile(filePath string) (*os.File, error) {
 
 func watchFile(filePath string, prevStat *syscall.Stat_t, config *Config, done chan struct{}) (*fsnotify.Watcher, chan struct{}, chan struct{}, chan error, error) {
 	removeCh := make(chan struct{})
-	writeCh := make(chan struct{})
+	writeCh := make(chan struct{}, 1)
 	errorCh := make(chan error)
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
@@ -293,14 +265,14 @@ func watchFile(filePath string, prevStat *syscall.Stat_t, config *Config, done c
 	}
 
 	go func() {
-		tk := time.NewTicker(config.PollInterval)
-		defer tk.Stop()
+		pollTicker := time.NewTicker(config.PollInterval)
+		defer pollTicker.Stop()
 		for {
 			select {
 			case <-done:
 				return
 			default:
-				<-tk.C
+				<-pollTicker.C
 				stat, err := os.Stat(filePath)
 				if err != nil {
 					errorCh <- err
@@ -328,6 +300,10 @@ func watchFile(filePath string, prevStat *syscall.Stat_t, config *Config, done c
 				}
 				if event.Op&fsnotify.Write == fsnotify.Write {
 					writeCh <- struct{}{}
+					select {
+					case writeCh <- struct{}{}:
+					default:
+					}
 				}
 				if event.Op&fsnotify.Remove == fsnotify.Remove {
 					log.Println("fsnotify: file remove detected")

@@ -16,7 +16,7 @@ func TestTailF(t *testing.T) {
 	if _, err := file.WriteString("this is 1 line\nthis is 2 line\nthis is the 3 line\n"); err != nil {
 		panic("write file error")
 	}
-	file.Close()
+	_ = file.Close()
 	eofCh := make(chan string)
 	lineCh, closeFunc, errCh := tailF(file.Name(), true, eofCh, &Config{PollInterval: 500 * time.Millisecond, Offset: SeekFromStart})
 	buf := bytes.Buffer{}
@@ -32,7 +32,9 @@ func TestTailF(t *testing.T) {
 			case ev := <-eofCh:
 				if ev == EventEof {
 					closeFunc()
-					t.Log(buf.String())
+					if "this is 1 linethis is 2 linethis is the 3 line" != buf.String() {
+						t.FailNow()
+					}
 					done <- 1
 				}
 			}
@@ -50,7 +52,7 @@ func TestTailF_Remove(t *testing.T) {
 	inspectCh := make(chan string)
 	lineCh, closeFunc, errCh := tailF(file.Name(), true, inspectCh, &Config{
 		PollInterval: 500 * time.Millisecond,
-		Offset: SeekFromStart,
+		Offset:       SeekFromStart,
 	})
 	buf := bytes.Buffer{}
 	done := make(chan int)
@@ -87,6 +89,7 @@ func TestTailF_Remove(t *testing.T) {
 				case <-errCh:
 					t.FailNow()
 				case line := <-lineCh:
+					t.Log(line)
 					buf.WriteString(line)
 				case ev := <-inspectCh:
 					if ev == EventTailRestart {
@@ -94,7 +97,9 @@ func TestTailF_Remove(t *testing.T) {
 					} else if ev == EventEof {
 						if restarted {
 							closeFunc()
-							t.Log(buf.String())
+							if "this is 11 linethis is 12 linethis is the 13 line" != buf.String() {
+								t.FailNow()
+							}
 							_ = os.Remove(filePath)
 							done <- 1
 							return
@@ -149,7 +154,6 @@ func TestTailF_Truncate(t *testing.T) {
 		}
 		filePath := file.Name()
 		cmd := fmt.Sprintf(`echo ''> %s`, file.Name())
-		t.Log(cmd)
 		err := exec.Command("/bin/bash", "-c", cmd).Run()
 		if err != nil {
 			panic(err)
@@ -165,6 +169,7 @@ func TestTailF_Truncate(t *testing.T) {
 		_ = file.Close()
 
 		go func() {
+			buf := bytes.Buffer{}
 			restarted := false
 			for {
 				select {
@@ -172,6 +177,7 @@ func TestTailF_Truncate(t *testing.T) {
 					t.FailNow()
 				case line := <-lineCh:
 					t.Log(line)
+					buf.WriteString(line)
 				case ev := <-inspectCh:
 					if ev == EventTailRestart {
 						restarted = true
@@ -179,6 +185,9 @@ func TestTailF_Truncate(t *testing.T) {
 						if restarted {
 							closeFunc()
 							_ = os.Remove(filePath)
+							if "this is 11 linethis is 12 linethis is the 13 line" != buf.String() {
+								t.FailNow()
+							}
 							done <- 1
 							return
 						}
