@@ -9,7 +9,6 @@ import (
 	"log"
 	"os"
 	"strings"
-	"syscall"
 	"time"
 )
 
@@ -136,7 +135,6 @@ func tail(filePath string, waitFileExist bool, lineCh chan string, closeCh chan 
 		return fmt.Errorf("stat file error: %s", err.Error())
 	}
 	size := stat.Size()
-	stat2 := stat.Sys().(*syscall.Stat_t)
 
 	offset := initSeekOffset(config, size)
 	_, err = file.Seek(offset.Offset, offset.Whence)
@@ -145,7 +143,7 @@ func tail(filePath string, waitFileExist bool, lineCh chan string, closeCh chan 
 	}
 
 	done := make(chan struct{})
-	watcher, removeCh, writeCh, errorCh, regWatchErr := watchFile(filePath, stat2, config, done)
+	watcher, removeCh, writeCh, errorCh, regWatchErr := watchFile(filePath, stat, config, done)
 	if regWatchErr != nil {
 		return regWatchErr
 	}
@@ -261,7 +259,7 @@ func ensureOpenFile(filePath string) (*os.File, error) {
 	}
 }
 
-func watchFile(filePath string, prevStat *syscall.Stat_t, config *Config, done chan struct{}) (*fsnotify.Watcher, chan struct{}, chan struct{}, chan error, error) {
+func watchFile(filePath string, prevStat os.FileInfo, config *Config, done chan struct{}) (*fsnotify.Watcher, chan struct{}, chan struct{}, chan error, error) {
 	removeCh := make(chan struct{})
 	writeCh := make(chan struct{}, 1)
 	errorCh := make(chan error)
@@ -284,9 +282,7 @@ func watchFile(filePath string, prevStat *syscall.Stat_t, config *Config, done c
 					errorCh <- err
 					return
 				}
-				stat2 := stat.Sys().(*syscall.Stat_t)
-				aTime := stat2.Atim
-				if aTime != prevStat.Atim || stat2.Ino != prevStat.Ino {
+				if !os.SameFile(prevStat, stat) {
 					log.Println("poll: file remove detected")
 					removeCh <- struct{}{}
 					return
