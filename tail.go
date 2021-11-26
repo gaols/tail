@@ -53,12 +53,14 @@ var (
 type Config struct {
 	PollInterval time.Duration
 	Offset       *SeekOffset
+	Follow       bool
 }
 
 func NewDefaultConfig() *Config {
 	return &Config{
 		PollInterval: 10 * time.Second,
 		Offset:       SeekOffsetAuto,
+		Follow:       true,
 	}
 }
 
@@ -185,6 +187,10 @@ func tail(filePath string, waitFileExist bool, lineCh chan string, closeCh chan 
 			halfLine, drainErr = drainFile(reader, lineCh, halfLine, ch)
 			if drainErr != nil {
 				return drainErr
+			} else {
+				if !config.Follow {
+					close(closeCh)
+				}
 			}
 		}
 	}

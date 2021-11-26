@@ -18,7 +18,11 @@ func TestTailF(t *testing.T) {
 	}
 	_ = file.Close()
 	eofCh := make(chan string)
-	lineCh, closeFunc, errCh := tailF(file.Name(), true, eofCh, &Config{PollInterval: 500 * time.Millisecond, Offset: SeekFromStart})
+	lineCh, closeFunc, errCh := tailF(file.Name(), true, eofCh, &Config{
+		PollInterval: 500 * time.Millisecond,
+		Offset:       SeekFromStart,
+		Follow:       true,
+	})
 	buf := bytes.Buffer{}
 	done := make(chan int)
 	go func() {
@@ -53,6 +57,7 @@ func TestTailF_Remove(t *testing.T) {
 	lineCh, closeFunc, errCh := tailF(file.Name(), true, inspectCh, &Config{
 		PollInterval: 500 * time.Millisecond,
 		Offset:       SeekFromStart,
+		Follow:       true,
 	})
 	buf := bytes.Buffer{}
 	done := make(chan int)
@@ -135,7 +140,11 @@ func TestTailF_Truncate(t *testing.T) {
 	}
 	_ = file.Close()
 	inspectCh := make(chan string)
-	lineCh, closeFunc, errCh := tailF(file.Name(), true, inspectCh, &Config{PollInterval: 500 * time.Millisecond, Offset: SeekFromStart})
+	lineCh, closeFunc, errCh := tailF(file.Name(), true, inspectCh, &Config{
+		PollInterval: 500 * time.Millisecond,
+		Offset:       SeekFromStart,
+		Follow:       true,
+	})
 	done := make(chan int)
 
 	go func() {
