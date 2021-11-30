@@ -301,7 +301,6 @@ func watchFile(filePath string, prevStat os.FileInfo, config *Config, done chan 
 					return
 				}
 				if event.Op&fsnotify.Write == fsnotify.Write {
-					writeCh <- struct{}{}
 					select {
 					case writeCh <- struct{}{}:
 					default:
